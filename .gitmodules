@@ -1,0 +1,3 @@
+[submodule "doamusic"]
+	path = doamusic
+	url = git@github.com:yump/doamusic.git
