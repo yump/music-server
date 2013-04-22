@@ -1,14 +1,18 @@
 from bottle import get, post, route, run, request, static_file
 import scipy as sp
 from scipy import misc
-import io
+from scipy import pi
 import doamusic
 import config
 
 class MusicServer:
     
-    def __init__(self,antennafile):
+    def __init__(self,antennafile,domain):
         self.all_antennas = sp.loadtxt(antennafile)
+        self.spec = None
+        self.evenspec = None
+        self.oddspec = None
+        self.domain = domain
 
     def newsubmission(self,parsedjson):
         """
@@ -33,6 +37,11 @@ class MusicServer:
                 self.oddsamp.append(complex(datum[0],datum[1]))
                 self.oddants.append(self.all_antennas[antid])
 
+        #invalidate caches
+        self.spec = None
+        self.evenspec = None
+        self.oddspec = None
+
     def renderspectrum(self):
 
         even_cov = doamusic.covar(self.evensamp)
@@ -46,30 +55,51 @@ class MusicServer:
             even_est = doamusic.Estimator(
                 antennas = self.evenants,
                 covariance = even_cov,
-                field_of_view = ((0,sp.pi),(-sp.pi/2,sp.pi/2)),
+                field_of_view = self.domain,
                 nsignals = 1
             )
-            evenspec = even_est.spectrum((512,512))
+            self.evenspec = even_est.spectrum((512,512))
         else:
-            evenspec = sp.zeros((512,512))
+            self.evenspec = sp.zeros((512,512))
         if len(self.oddsamp) >= 2:
             odd_est = doamusic.Estimator(
                 antennas = self.oddants,
                 covariance = odd_cov,
-                field_of_view = ((0,sp.pi),(-sp.pi/2,sp.pi/2)),
+                field_of_view = self.domain,
                 nsignals = 1
             )
-            oddspec = odd_est.spectrum((512,512))
+            self.oddspec = odd_est.spectrum((512,512))
         else:
-            oddspec = sp.zeros((512,512))
+            self.oddspec = sp.zeros((512,512))
 
-        spec = evenspec + oddspec
+        self.spec = self.evenspec + self.oddspec
+
+    def renderboth(self):
+        if not self.spec:
+            self.renderspectrum()
         fn = "/tmp/music-spectrum.png"
-        sp.misc.imsave(fn,spec/spec.max()) #TODO: make this not fugly
+        sp.misc.imsave(fn,self.spec/self.spec.max())
+        return fn
+
+    def rendereven(self):
+        if not self.evenspec:
+            self.renderspectrum()
+        fn = "/tmp/spectrum-even.png"
+        sp.misc.imsave(fn,self.evenspec/self.evenspec.max())
+        return fn
+
+    def renderodd(self):
+        if not self.oddspec:
+            self.renderspectrum()
+        fn = "/tmp/spectrum-odd.png"
+        sp.misc.imsave(fn,self.oddspec/self.oddspec.max())
         return fn
 
 if __name__ == "__main__": 
-    server = MusicServer(config.antennafile)
+    server = MusicServer(
+        config.antennafile,
+        ( (0,pi),(-pi,pi) )
+        )
 
     @route(config.submitpath, method='POST')
     def do_newsample():
@@ -78,7 +108,15 @@ if __name__ == "__main__":
 
     @route(config.spectrumpath, method='GET')
     def do_spectrum():
-        return static_file(server.renderspectrum(),'/')
+        return static_file(server.renderboth(),'/')
+
+    @route(config.spectrumpath_even, method='GET')
+    def do_spectrum():
+        return static_file(server.rendereven(),'/')
+
+    @route(config.spectrumpath_odd, method='GET')
+    def do_spectrum():
+        return static_file(server.renderodd(),'/')
 
     run(host='0.0.0.0', port=8080, debug=True)
 
